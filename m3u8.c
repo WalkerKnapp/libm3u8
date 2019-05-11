@@ -15,7 +15,6 @@
 
 #define M3U8_TAG_MAX_SIZE 128
 #define M3U8_URI_MAX_SIZE 1024
-#define M3U8_ATTRIBUTE_NAME_MAX_SIZE 128
 #define M3U8_ATTRIBUTE_MAX_SIZE 128
 
 #define cap_string(size, buf) buf[size] = 0x0; buf = realloc(buf, size + 1)
@@ -50,7 +49,7 @@ typedef struct {
     media_init_section *latest_media_init_section;
 } M3U8_internal;
 
-int parse_attribute_name(M3U8_internal *m_internal, char *read, unsigned int *readinc, const char *buffer, int buffersize, int reset_attribute_sequence) {
+int parse_attribute_name(M3U8_internal *m_internal, char *read, int *readinc, const char *buffer, int buffersize, int reset_attribute_sequence) {
     while (*readinc < buffersize) {
         *read = buffer[*readinc];
         if (*read == '\n' || *read == '\r') {
@@ -74,7 +73,7 @@ int parse_attribute_name(M3U8_internal *m_internal, char *read, unsigned int *re
 }
 
 // max_dest_size is in integers
-int parse_hex_int(M3U8_internal *m_internal, char *read, unsigned int *readinc, const char *buffer, int buffersize, unsigned int** dest, unsigned int max_dest_size, int attribute_sequence_reset) {
+int parse_hex_int(M3U8_internal *m_internal, char *read, unsigned int *readinc, const char *buffer, unsigned int buffersize, unsigned int** dest, unsigned int max_dest_size, int attribute_sequence_reset) {
     if (m_internal->_parse_index == 0) {
         if(*read != '0') {
             fprintf(stderr, "[m3u8] Invalid file format: Hex Integer does not start with \"0x\". Offset: %i\n", *readinc);
@@ -101,6 +100,7 @@ int parse_hex_int(M3U8_internal *m_internal, char *read, unsigned int *readinc, 
         if(*read == '\n' || *read == '\r') {
             (*readinc)++;
             m_internal->_parse_token = START;
+            m_internal->_parse_index = 0;
             return 0;
         } else if (*read == ',') {
             m_internal->_attribute_sequence = attribute_sequence_reset;
@@ -129,7 +129,7 @@ int parse_hex_int(M3U8_internal *m_internal, char *read, unsigned int *readinc, 
     return 0;
 }
 
-int parse_quoted_string(M3U8_internal *m_internal, char *read, unsigned int *readinc, const char *buffer, int buffersize, char **dest, int attribute_sequence_reset) {
+int parse_quoted_string(M3U8_internal *m_internal, char *read, unsigned int *readinc, const char *buffer, unsigned int buffersize, char **dest, int attribute_sequence_reset) {
     if (*dest == NULL) {
         *dest = malloc(M3U8_ATTRIBUTE_MAX_SIZE);
     }
@@ -152,6 +152,8 @@ int parse_quoted_string(M3U8_internal *m_internal, char *read, unsigned int *rea
             }
             (*readinc)++;
             m_internal->_parse_token = START;
+            m_internal->_parse_index = 0;
+            return 0;
         } else if (*read == '"') {
             cap_string(m_internal->_parse_index - 1, *dest);
             m_internal->_parse_index = -1;
@@ -170,7 +172,7 @@ int parse_quoted_string(M3U8_internal *m_internal, char *read, unsigned int *rea
     return 0;
 }
 
-int parse_quoted_string_as_hash(M3U8_internal *m_internal, char *read, unsigned int *readinc, const char *buffer, int buffersize, unsigned long *dest, int attribute_sequence_reset) {
+int parse_quoted_string_as_hash(M3U8_internal *m_internal, char *read, int *readinc, const char *buffer, int buffersize, unsigned long *dest, int attribute_sequence_reset) {
     if (m_internal->_parse_index == 0) {
         if(*read != '"') {
             fprintf(stderr, "[m3u8] Invalid file format: Quoted string does not start with '\"' Offset: %i\n", *readinc);
@@ -190,6 +192,7 @@ int parse_quoted_string_as_hash(M3U8_internal *m_internal, char *read, unsigned 
             }
             (*readinc)++;
             m_internal->_parse_token = START;
+            m_internal->_parse_index = 0;
             break;
         } else if (*read == '"') {
             m_internal->_parse_index = -1;
@@ -208,12 +211,13 @@ int parse_quoted_string_as_hash(M3U8_internal *m_internal, char *read, unsigned 
     return 0;
 }
 
-int parse_decimal_integer(M3U8_internal *m_internal, char *read, unsigned int *readinc, const char *buffer, int buffersize, int *dest, int attribute_sequence_reset) {
+int parse_decimal_integer(M3U8_internal *m_internal, char *read, int *readinc, const char *buffer, int buffersize, int *dest, int attribute_sequence_reset) {
     while (*readinc < buffersize) {
         *read = buffer[*readinc];
         if(*read == '\n' || *read == '\r') {
             m_internal->_parse_token = START;
             (*readinc)++;
+            m_internal->_parse_index = 0;
             break;
         } else if (*read == ',') {
             m_internal->_attribute_sequence = attribute_sequence_reset;
@@ -231,7 +235,7 @@ int parse_decimal_integer(M3U8_internal *m_internal, char *read, unsigned int *r
     return 0;
 }
 
-int parse_resolution(M3U8_internal *m_internal, char *read, unsigned int *readinc, const char *buffer, int buffersize, int *x_dest, int *y_dest, int attribute_sequence_reset) {
+int parse_resolution(M3U8_internal *m_internal, char *read, int *readinc, const char *buffer, int buffersize, int *x_dest, int *y_dest, int attribute_sequence_reset) {
     while (*readinc < buffersize) {
         *read = buffer[*readinc];
         if(*read == '\n' || *read == '\r') {
@@ -241,6 +245,7 @@ int parse_resolution(M3U8_internal *m_internal, char *read, unsigned int *readin
             } else {
                 m_internal->_parse_token = START;
                 (*readinc)++;
+                m_internal->_parse_index = 0;
                 break;
             }
         } else if (*read == ',') {
@@ -283,7 +288,7 @@ int parse_resolution(M3U8_internal *m_internal, char *read, unsigned int *readin
     return 0;
 }
 
-int parse_decimal_float(M3U8_internal *m_internal, char *read, unsigned int *readinc, const char *buffer,
+int parse_decimal_float(M3U8_internal *m_internal, char *read, int *readinc, const char *buffer,
                         int buffersize, float *dest, int attribute_sequence_reset) {
     while (*readinc < buffersize) {
         *read = buffer[*readinc];
@@ -294,6 +299,7 @@ int parse_decimal_float(M3U8_internal *m_internal, char *read, unsigned int *rea
             } else {
                 m_internal->_parse_token = START;
                 (*readinc)++;
+                m_internal->_parse_index = 0;
                 break;
             }
         } else if (*read == ',') {
@@ -341,6 +347,7 @@ M3U8 *create_m3u8() {
 playlist *create_playlist(M3U8 *m3u8) {
     playlist *pl = (playlist*) malloc(sizeof(playlist));
     ((M3U8_internal *)m3u8)->_parse_token = START;
+    ((M3U8_internal *)m3u8)->_parse_index = 0;
     return pl;
 }
 
@@ -383,12 +390,27 @@ variant_playlist *create_latest_variant_playlist(M3U8_internal *m_internal, play
     }
 }
 
+int verify_playlist_type(playlist *playlist, enum playlist_type type, int i) {
+    if(playlist->type == UNKNOWN) {
+        debug_print("[m3u8] Setting playlist type to %i.\n", type);
+        playlist->type = type;
+    } else if (playlist->type != type) {
+        if(type == MEDIA_PLAYLIST){
+            fprintf(stderr, "[m3u8] Parsed a media playlist only tag in a master playlist. Offset: %i\n", i);
+        } else {
+            fprintf(stderr, "[m3u8] Parsed a master playlist only tag in a media playlist. Offset: %i\n", i);
+        }
+        return -1;
+    }
+    return 0;
+}
+
 void parse_playlist_chunk(M3U8 *m3u8, playlist *playlist, const char *buffer, int size) {
     debug_print("[m3u8] Parsing buffer of size %i\n", size);
 
     M3U8_internal* m_internal = m3u8;
 
-    for (unsigned int i = 0; i < size; i++) {
+    for (int i = 0; i < size; i++) {
         char c = buffer[i];
 
         // See if the playlist is being parsed from the beginning of or partly through a line
@@ -477,12 +499,16 @@ void parse_playlist_chunk(M3U8 *m3u8, playlist *playlist, const char *buffer, in
                                     break;
                                     // Media Segment Tags
                                 case EXT_X_DISCONTINUITY:
+                                    verify_playlist_type(playlist, MEDIA_PLAYLIST, i);
                                     create_latest_media_segment(m_internal, playlist)->discontinuity = true;
                                     break;
                                     // Media Playlist Tags
                                 case EXT_X_ENDLIST:
+                                    verify_playlist_type(playlist, MEDIA_PLAYLIST, i);
                                     // TODO: Maybe lock playlist after EXT-X-ENDLIST?
+                                    break;
                                 case EXT_X_I_FRAMES_ONLY:
+                                    verify_playlist_type(playlist, MEDIA_PLAYLIST, i);
                                     playlist->i_frames_only = true;
                                     break;
                                     // Master Playlist Tags
@@ -495,6 +521,7 @@ void parse_playlist_chunk(M3U8 *m3u8, playlist *playlist, const char *buffer, in
                             }
                             m_internal->_parse_token = START;
                             i++;
+                            m_internal->_parse_index = 0;
                             break;
                         } // Otherwise a very short comment, ignore
                     } else if (c == ':') {
@@ -535,6 +562,8 @@ void parse_playlist_chunk(M3U8 *m3u8, playlist *playlist, const char *buffer, in
                 c = buffer[i];
                 if(c == '\n' || c == '\r') {
                     m_internal->_parse_token = START;
+                    m_internal->_parse_index = 0;
+                    i++;
                     break;
                 }
                 i++;
@@ -544,6 +573,7 @@ void parse_playlist_chunk(M3U8 *m3u8, playlist *playlist, const char *buffer, in
                 // Media Segment Tags
                 case EXTINF:
                     // Format: <duration(float/int)>,[<title(non-quoted-str)>]
+                    verify_playlist_type(playlist, MEDIA_PLAYLIST, i);
                     media_segment *inf_segment = create_latest_media_segment(m_internal, playlist);
                     if(m_internal->_attribute_sequence == 0) {
                         while (i < size) {
@@ -551,6 +581,7 @@ void parse_playlist_chunk(M3U8 *m3u8, playlist *playlist, const char *buffer, in
                             if(c == '\n' || c == '\r') {
                                 m_internal->_parse_token = START;
                                 i++;
+                                m_internal->_parse_index = 0;
                                 break;
                             } else if (c == ',') {
                                 inf_segment->title = malloc(M3U8_ATTRIBUTE_MAX_SIZE);
@@ -579,6 +610,7 @@ void parse_playlist_chunk(M3U8 *m3u8, playlist *playlist, const char *buffer, in
                             if (c == '\n' || c == '\r') {
                                 m_internal->_parse_token = START;
                                 i++;
+                                m_internal->_parse_index = 0;
                                 break;
                             } else if (c == ',') {
                                 inf_segment->title = malloc(M3U8_ATTRIBUTE_MAX_SIZE);
@@ -603,6 +635,7 @@ void parse_playlist_chunk(M3U8 *m3u8, playlist *playlist, const char *buffer, in
                             if (c == '\n' || c == '\r') {
                                 cap_string(m_internal->_parse_index, inf_segment->title);
                                 m_internal->_parse_token = START;
+                                m_internal->_parse_index = 0;
                                 i++;
                                 break;
                             }
@@ -614,6 +647,7 @@ void parse_playlist_chunk(M3U8 *m3u8, playlist *playlist, const char *buffer, in
                     }
                     break;
                 case EXT_X_KEY:
+                    verify_playlist_type(playlist, MEDIA_PLAYLIST, i);
                     media_segment *key_segment = create_latest_media_segment(m_internal, playlist);
                     while (i < size) {
                         if (m_internal->_attribute_sequence == 0) {
@@ -651,6 +685,7 @@ void parse_playlist_chunk(M3U8 *m3u8, playlist *playlist, const char *buffer, in
                                             } else {
                                                 m_internal->_parse_token = START;
                                                 i++;
+                                                m_internal->_parse_index = 0;
                                                 break;
                                             }
                                         } else {
@@ -686,6 +721,7 @@ void parse_playlist_chunk(M3U8 *m3u8, playlist *playlist, const char *buffer, in
                         }
                     }
                 case EXT_X_MAP:
+                    verify_playlist_type(playlist, MEDIA_PLAYLIST, i);
                     if(m_internal->_attribute_sequence == 0) {
                         m_internal->latest_media_init_section = malloc(sizeof(media_init_section));
                         m_internal->_attribute_sequence = 1;
@@ -710,6 +746,7 @@ void parse_playlist_chunk(M3U8 *m3u8, playlist *playlist, const char *buffer, in
                                         if(c == '\n' || c == '\r') {
                                             m_internal->_parse_token = START;
                                             i++;
+                                            m_internal->_parse_index = 0;
                                             break;
                                         } else if (c == '@') {
                                             m_internal->_attribute_sequence = 3;
@@ -737,6 +774,7 @@ void parse_playlist_chunk(M3U8 *m3u8, playlist *playlist, const char *buffer, in
                                 if(c == '\n' || c == '\r') {
                                     m_internal->_parse_token = START;
                                     i++;
+                                    m_internal->_parse_index = 0;
                                     break;
                                 } else if (!isdigit(c)) {
                                     fprintf(stderr, "[m3u8] Invalid file format: Non-digit found in byterange of EXT-X-MAP. Offset: %i\n", i);
@@ -751,14 +789,17 @@ void parse_playlist_chunk(M3U8 *m3u8, playlist *playlist, const char *buffer, in
                     }
                     break;
                 case EXT_X_PROGRAM_DATE_TIME:
+                    verify_playlist_type(playlist, MEDIA_PLAYLIST, i);
                     m_internal->_parse_token = TAG_SKIPPING;
                     // TODO: Are there no good datetime apis for c?
                 case EXT_X_DATERANGE:
+                    verify_playlist_type(playlist, MEDIA_PLAYLIST, i);
                     m_internal->_parse_token = TAG_SKIPPING;
                     // TODO: Find a way to accurately represent this data.
                     break;
                 // Media Playlist Tags
                 case EXT_X_TARGETDURATION:
+                    verify_playlist_type(playlist, MEDIA_PLAYLIST, i);
                     if (m_internal->_attribute_sequence == 0) {
                         playlist->target_duration = 0;
                         m_internal->_attribute_sequence = 1;
@@ -768,6 +809,7 @@ void parse_playlist_chunk(M3U8 *m3u8, playlist *playlist, const char *buffer, in
                         if (c == '\n' || c == '\r') {
                             m_internal->_parse_token = START;
                             i++;
+                            m_internal->_parse_index = 0;
                             break;
                         } else if (!isdigit(c)) {
                             fprintf(stderr, "[m3u8] Invalid file format: Non-digit found in EXT-X-TARGETDURATION. Offset: %i\n", i);
@@ -781,6 +823,7 @@ void parse_playlist_chunk(M3U8 *m3u8, playlist *playlist, const char *buffer, in
                     }
                     break;
                 case EXT_X_MEDIA_SEQUENCE:
+                    verify_playlist_type(playlist, MEDIA_PLAYLIST, i);
                     media_segment *m_sequence_segment = playlist->first_media_segment;
                     if(m_internal->_attribute_sequence == 0) {
                         if (m_sequence_segment != NULL) {
@@ -797,6 +840,7 @@ void parse_playlist_chunk(M3U8 *m3u8, playlist *playlist, const char *buffer, in
                         if (c == '\n' || c == '\r') {
                             m_internal->_parse_token = START;
                             i++;
+                            m_internal->_parse_index = 0;
                             break;
                         } else if (!isdigit(c)) {
                             fprintf(stderr, "[m3u8] Invalid file format: Non-digit found in EXT-X-MEDIA-SEQUENCE. Offset: %i\n", i);
@@ -810,10 +854,12 @@ void parse_playlist_chunk(M3U8 *m3u8, playlist *playlist, const char *buffer, in
                     }
                     break;
                 case EXT_X_DISCONTINUITY_SEQUENCE:
+                    verify_playlist_type(playlist, MEDIA_PLAYLIST, i);
                     m_internal->_parse_token = TAG_SKIPPING;
                     // TODO: See where this applies
                     break;
                 case EXT_X_PLAYLIST_TYPE:
+                    verify_playlist_type(playlist, MEDIA_PLAYLIST, i);
                     while (i < size) {
                         c = buffer[i];
                         if (c == '\n' || c == '\r') {
@@ -831,6 +877,7 @@ void parse_playlist_chunk(M3U8 *m3u8, playlist *playlist, const char *buffer, in
 
                             m_internal->_parse_token = START;
                             i++;
+                            m_internal->_parse_index = 0;
                             break;
                         }
 
@@ -839,6 +886,7 @@ void parse_playlist_chunk(M3U8 *m3u8, playlist *playlist, const char *buffer, in
                     }
                 // Master Playlist Tags
                 case EXT_X_MEDIA:
+                    verify_playlist_type(playlist, MASTER_PLAYLIST, i);
                     variant_rendition *media_variant_rendition;
                     if(m_internal->_attribute_sequence == 0) {
                         media_variant_rendition = malloc(sizeof(media_variant_rendition));
@@ -890,6 +938,7 @@ void parse_playlist_chunk(M3U8 *m3u8, playlist *playlist, const char *buffer, in
                                             } else {
                                                 m_internal->_parse_token = START;
                                                 i++;
+                                                m_internal->_parse_index = 0;
                                                 break;
                                             }
                                         } else {
@@ -946,6 +995,7 @@ void parse_playlist_chunk(M3U8 *m3u8, playlist *playlist, const char *buffer, in
                                             } else {
                                                 m_internal->_parse_token = START;
                                                 i++;
+                                                m_internal->_parse_index = 0;
                                                 break;
                                             }
                                         } else {
@@ -977,6 +1027,7 @@ void parse_playlist_chunk(M3U8 *m3u8, playlist *playlist, const char *buffer, in
                                             } else {
                                                 m_internal->_parse_token = START;
                                                 i++;
+                                                m_internal->_parse_index = 0;
                                                 break;
                                             }
                                         } else {
@@ -1008,6 +1059,7 @@ void parse_playlist_chunk(M3U8 *m3u8, playlist *playlist, const char *buffer, in
                                             } else {
                                                 m_internal->_parse_token = START;
                                                 i++;
+                                                m_internal->_parse_index = 0;
                                                 break;
                                             }
                                         } else {
@@ -1040,6 +1092,7 @@ void parse_playlist_chunk(M3U8 *m3u8, playlist *playlist, const char *buffer, in
                     }
                     break;
                 case EXT_X_STREAM_INF:
+                    verify_playlist_type(playlist, MASTER_PLAYLIST, i);
                     variant_playlist *streaminf_variant_playlist = create_latest_variant_playlist(m_internal, playlist);
                     while (i < size) {
                         c = buffer[i];
@@ -1102,6 +1155,7 @@ void parse_playlist_chunk(M3U8 *m3u8, playlist *playlist, const char *buffer, in
                                             } else {
                                                 m_internal->_parse_token = START;
                                                 i++;
+                                                m_internal->_parse_index = 0;
                                                 break;
                                             }
                                         } else {
@@ -1129,6 +1183,7 @@ void parse_playlist_chunk(M3U8 *m3u8, playlist *playlist, const char *buffer, in
                     }
                     break;
                 case EXT_X_I_FRAME_STREAM_INF:
+                    verify_playlist_type(playlist, MASTER_PLAYLIST, i);
                     variant_playlist *istreaminf_variant_playlist = create_latest_variant_playlist(m_internal, playlist);
                     while (i < size) {
                         c = buffer[i];
@@ -1185,6 +1240,7 @@ void parse_playlist_chunk(M3U8 *m3u8, playlist *playlist, const char *buffer, in
                                             } else {
                                                 m_internal->_parse_token = START;
                                                 i++;
+                                                m_internal->_parse_index = 0;
                                                 break;
                                             }
                                         } else {
@@ -1217,6 +1273,7 @@ void parse_playlist_chunk(M3U8 *m3u8, playlist *playlist, const char *buffer, in
                     }
                     break;
                 case EXT_X_SESSION_DATA:
+                    verify_playlist_type(playlist, MASTER_PLAYLIST, i);
                     session_data *sd_session_data;
                     if(m_internal->_attribute_sequence == 0) {
                         sd_session_data = malloc(sizeof(sd_session_data));
@@ -1280,6 +1337,7 @@ void parse_playlist_chunk(M3U8 *m3u8, playlist *playlist, const char *buffer, in
                     }
                     break;
                 case EXT_X_SESSION_KEY:
+                    verify_playlist_type(playlist, MASTER_PLAYLIST, i);
                     m_internal->_parse_token = TAG_SKIPPING;
                     // TODO: Properly handle keys
                     break;
@@ -1324,6 +1382,7 @@ void parse_playlist_chunk(M3U8 *m3u8, playlist *playlist, const char *buffer, in
                                             } else {
                                                 m_internal->_parse_token = START;
                                                 i++;
+                                                m_internal->_parse_index = 0;
                                                 break;
                                             }
                                         } else {
@@ -1351,7 +1410,41 @@ void parse_playlist_chunk(M3U8 *m3u8, playlist *playlist, const char *buffer, in
             }
         } else if (m_internal->_parse_token == URI) {
             // TODO: Set NULL Segment/Variant after done parsing
-            // TODO:
+            char *uri;
+            if(playlist->type == MASTER_PLAYLIST && m_internal->_latest_content_token != NULL) {
+                if(((variant_playlist *)m_internal->_latest_content_token)->uri == NULL) {
+                    uri = malloc(M3U8_URI_MAX_SIZE);
+                    ((variant_playlist *)m_internal->_latest_content_token)->uri = uri;
+                } else {
+                    uri = ((variant_playlist *)m_internal->_latest_content_token)->uri;
+                }
+            } else if (playlist->type == MEDIA_PLAYLIST && m_internal->_latest_content_token != NULL) {
+                if(((media_segment *)m_internal->_latest_content_token)->uri == NULL) {
+                    uri = malloc(M3U8_URI_MAX_SIZE);
+                    ((media_segment *)m_internal->_latest_content_token)->uri = uri;
+                } else {
+                    uri = ((media_segment *)m_internal->_latest_content_token)->uri;
+                }
+            } else {
+                fprintf(stderr, "[m3u8] Invalid file format: Parsed URI before EXTINF or EXT-X-STREAM-INF tag. Offset: %i\n", i);
+                return;
+            }
+            while (i < size) {
+                c = buffer[i];
+                if(c == '\n' || c == '\r') {
+                    // Url is done!
+                    m_internal->_latest_content_token = NULL;
+
+                    m_internal->_parse_token = START;
+                    m_internal->_parse_index = 0;
+                    i++;
+                    break;
+                } else {
+                    uri[m_internal->_parse_index] = c;
+                }
+
+                i++;
+            }
         }
     }
 }
