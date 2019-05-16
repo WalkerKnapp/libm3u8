@@ -7,23 +7,57 @@
 #include <stdint.h>
 #include <math.h>
 
+#define M3U8_DEBUG
 #ifdef M3U8_DEBUG
-#define debug_print(msg, args) fprintf(msg, args);
+#define debug_print0(msg) fprintf(stderr, msg)
+#define debug_print(msg, arg) fprintf(stderr, msg, arg)
+#define debug_print2(msg, arg1, arg2) fprintf(stderr, msg, arg1, arg2)
 #else // M3U8 not defined
-#define debug_print(msg, args)
+#define debug_print0(msg)
+#define debug_print(msg, arg)
+#define debug_print2(msg, arg1, arg2)
 #endif
 
 #define M3U8_TAG_MAX_SIZE 128
 #define M3U8_URI_MAX_SIZE 1024
 #define M3U8_ATTRIBUTE_MAX_SIZE 128
 
-#define cap_string(size, buf) buf[size] = 0x0; buf = realloc(buf, size + 1)
+//TODO: Figure out why this is broken
+#define cap_string(size, buf) buf[size] = 0x0; //buf = realloc(buf, size + 1)
+
+#define PARSE_ENUM_START while (i < size) { \
+                                        c = buffer[i]; \
+                                        if (c == '\n' || c == '\r' || c == ',') { \
+                                            switch (m_internal->attribute_enum_hash) { \
+                                                case
+#define PARSE_ENUM_BREAK break; \
+                                                case
+#define PARSE_ENUM_FINISH(sequence_reset) break; \
+                                                default: \
+                                                    fprintf(stderr, "[m3u8] Invalid file format: Unexpected enum value, h:%lu. Offset: %i\n", m_internal->attribute_enum_hash, i); \
+                                                    return; \
+                                            } \
+\
+                                            if (c == ',') { \
+                                                m_internal->_attribute_sequence = sequence_reset; \
+                                                m_internal->attribute_name_hash = HASH_START_VALUE; \
+                                                i++; \
+                                                break; \
+                                            } else { \
+                                                m_internal->_parse_token = START; \
+                                                m_internal->_parse_index = 0; \
+                                                break; \
+                                            } \
+                                        } else { \
+                                            hash_char(m_internal->attribute_enum_hash, c); \
+                                            i++; \
+                                        } \
+                                    }
 
 enum parse_token {
     START,
     TAG,
     TAG_SKIPPING,
-    ATTRIBUTE_NAME,
     ATTRIBUTE,
     URI
 };
@@ -31,15 +65,15 @@ enum parse_token {
 typedef struct {
     bool allow_custom_tags;
     // EXT-X-MEDIA-SEGMENT and EXT-X-DISCONTINUITY-SEQUENCE
-    bool force_tag_sequencing;
+    bool strict_attribute_lists;
 
     // Parsing helpers
     enum parse_token _parse_token;
     char *_parse_buffer;
 
-    unsigned long tag_hash;
-    unsigned long attribute_name_hash;
-    unsigned long attribute_enum_hash;
+    HASH tag_hash;
+    HASH attribute_name_hash;
+    HASH attribute_enum_hash;
 
     int _parse_index;
     void *_latest_content_token;
@@ -73,7 +107,7 @@ int parse_attribute_name(M3U8_internal *m_internal, char *read, int *readinc, co
 }
 
 // max_dest_size is in integers
-int parse_hex_int(M3U8_internal *m_internal, char *read, unsigned int *readinc, const char *buffer, unsigned int buffersize, unsigned int** dest, unsigned int max_dest_size, int attribute_sequence_reset) {
+int parse_hex_int(M3U8_internal *m_internal, char *read, int *readinc, const char *buffer, int buffersize, unsigned int** dest, unsigned int max_dest_size, int attribute_sequence_reset) {
     if (m_internal->_parse_index == 0) {
         if(*read != '0') {
             fprintf(stderr, "[m3u8] Invalid file format: Hex Integer does not start with \"0x\". Offset: %i\n", *readinc);
@@ -116,12 +150,14 @@ int parse_hex_int(M3U8_internal *m_internal, char *read, unsigned int *readinc, 
             return -1;
         }
 
-        if((m_internal->_parse_index - 2)/ (sizeof(int) * 2) >= max_dest_size) {
+        int i = (m_internal->_parse_index - 2)/ (sizeof(int) * 2);
+
+        if(i >= max_dest_size) {
             fprintf(stderr, "[m3u8] Invalid file format: Hex Integer is too long. Expected to be able to store in %i integers. Offset: %i\n", max_dest_size, *readinc);
             return -1;
         }
 
-        (*dest)[(m_internal->_parse_index - 2)/ (sizeof(int) * 2)] = ((*dest)[(m_internal->_parse_index - 2)/ (sizeof(int) * 2)] << 4) | (byte & 0xF);
+        (*dest)[i] = ((*dest)[i] << 4u) | (byte & 0xFu);
         
         (*readinc)++;
         m_internal->_parse_index++;
@@ -129,21 +165,22 @@ int parse_hex_int(M3U8_internal *m_internal, char *read, unsigned int *readinc, 
     return 0;
 }
 
-int parse_quoted_string(M3U8_internal *m_internal, char *read, unsigned int *readinc, const char *buffer, unsigned int buffersize, char **dest, int attribute_sequence_reset) {
-    if (*dest == NULL) {
-        *dest = malloc(M3U8_ATTRIBUTE_MAX_SIZE);
-    }
+int parse_quoted_string(M3U8_internal *m_internal, char *read, int *readinc, const char *buffer, int buffersize, char **dest, int attribute_sequence_reset) {
     if (m_internal->_parse_index == 0) {
+        *read = buffer[*readinc];
         if(*read != '"') {
-            fprintf(stderr, "[m3u8] Invalid file format: Quoted string does not start with '\"' Offset: %i\n", *readinc);
+            fprintf(stderr, "[m3u8] Invalid file format: Quoted string does not start with '\"', instead starts with '%c'. Offset: %i\n", *read, *readinc);
             return -1;
         } else {
             (*readinc)++;
             m_internal->_parse_index = 1;
         }
+
+        *dest = malloc(M3U8_ATTRIBUTE_MAX_SIZE);
     }
     while ((*readinc) < buffersize) {
         *read = buffer[*readinc];
+        //debug_print2("[m3u8] Reading character '%c'. Offset: %i\n", *read, *readinc);
         if(*read == '\n' || *read == '\r') {
             if(m_internal->_parse_index != -1) {
                 fprintf(stderr, "[m3u8] Invalid file format: Unexpected newline in quoted string. Offset: %i\n",
@@ -155,14 +192,19 @@ int parse_quoted_string(M3U8_internal *m_internal, char *read, unsigned int *rea
             m_internal->_parse_index = 0;
             return 0;
         } else if (*read == '"') {
-            cap_string(m_internal->_parse_index - 1, *dest);
+            cap_string(m_internal->_parse_index - 1, (*dest));
             m_internal->_parse_index = -1;
             (*readinc)++;
-        } else if (m_internal->_parse_index == -1 && *read == ',') {
-            m_internal->_attribute_sequence = attribute_sequence_reset;
-            m_internal->attribute_name_hash = HASH_START_VALUE;
-            (*readinc)++;
-            break;
+            *read = buffer[*readinc];
+            if(*read == ',') {
+                m_internal->_attribute_sequence = attribute_sequence_reset;
+                m_internal->attribute_name_hash = HASH_START_VALUE;
+                (*readinc)++;
+                break;
+            } else {
+                fprintf(stderr, "[m3u8] Invalid file format: Expected ',' following '\"', instead got '%c' Offset: %i\n", *read, *readinc);
+                return -1;
+            }
         } else {
             (*dest)[m_internal->_parse_index - 1] = *read;
             m_internal->_parse_index++;
@@ -174,6 +216,7 @@ int parse_quoted_string(M3U8_internal *m_internal, char *read, unsigned int *rea
 
 int parse_quoted_string_as_hash(M3U8_internal *m_internal, char *read, int *readinc, const char *buffer, int buffersize, unsigned long *dest, int attribute_sequence_reset) {
     if (m_internal->_parse_index == 0) {
+        *read = buffer[*readinc];
         if(*read != '"') {
             fprintf(stderr, "[m3u8] Invalid file format: Quoted string does not start with '\"' Offset: %i\n", *readinc);
             return -1;
@@ -211,9 +254,11 @@ int parse_quoted_string_as_hash(M3U8_internal *m_internal, char *read, int *read
     return 0;
 }
 
-int parse_decimal_integer(M3U8_internal *m_internal, char *read, int *readinc, const char *buffer, int buffersize, int *dest, int attribute_sequence_reset) {
+int parse_decimal_integer(M3U8_internal *m_internal, char *read, int *readinc, const char *buffer, int buffersize, long *dest, int attribute_sequence_reset) {
+    // TODO: WTF?
     while (*readinc < buffersize) {
         *read = buffer[*readinc];
+        debug_print2("[m3u8] Parsed character '%c'. Offset: %i\n", *read, *readinc);
         if(*read == '\n' || *read == '\r') {
             m_internal->_parse_token = START;
             (*readinc)++;
@@ -223,6 +268,7 @@ int parse_decimal_integer(M3U8_internal *m_internal, char *read, int *readinc, c
             m_internal->_attribute_sequence = attribute_sequence_reset;
             m_internal->attribute_name_hash = HASH_START_VALUE;
             (*readinc)++;
+            break;
         } else if (!isdigit(*read)) {
             fprintf(stderr, "[m3u8] Invalid file format: Non-digit found in decimal integer. Offset: %i\n", *readinc);
             return -1;
@@ -293,15 +339,11 @@ int parse_decimal_float(M3U8_internal *m_internal, char *read, int *readinc, con
     while (*readinc < buffersize) {
         *read = buffer[*readinc];
         if(*read == '\n' || *read == '\r') {
-            if(m_internal->_parse_index == 0) {
-                fprintf(stderr, "[m3u8] Invalid file format: Unexpected newline in resolution. Offset: %i\n", *readinc);
-                return -1;
-            } else {
-                m_internal->_parse_token = START;
-                (*readinc)++;
-                m_internal->_parse_index = 0;
-                break;
-            }
+            m_internal->_attribute_sequence = attribute_sequence_reset;
+            m_internal->_parse_token = START;
+            (*readinc)++;
+            m_internal->_parse_index = 0;
+            return 0;
         } else if (*read == ',') {
             m_internal->_attribute_sequence = attribute_sequence_reset;
             m_internal->attribute_name_hash = HASH_START_VALUE;
@@ -323,14 +365,33 @@ int parse_decimal_float(M3U8_internal *m_internal, char *read, int *readinc, con
                 *dest *= 10;
                 *dest += *read - '0';
                 (*readinc)++;
-            } else if (m_internal->_parse_index == 1) {
+            } else {
                 *dest += ((float)(*read) - '0')/pow(10, m_internal->_parse_index);
                 m_internal->_parse_index++;
                 (*readinc)++;
-            } else {
-                fprintf(stderr, "[m3u8] Invalid file format: Invalid parse_index state while parsing resolution: %i. Offset: %i\n", m_internal->_parse_index, *readinc);
-                return -1;
             }
+        }
+    }
+    return 0;
+}
+
+
+int skip_attribute(M3U8_internal *m_internal, char *read, int *readinc, const char *buffer, int buffersize, int attribute_sequence_reset) {
+    debug_print2("Skipping unknown attribute h:%lu. Offset: %i\n", m_internal->attribute_name_hash, *readinc);
+    while ((*readinc) < buffersize) {
+        *read = buffer[*readinc];
+        if(*read == '\n' || *read == '\r') {
+            (*readinc)++;
+            m_internal->_parse_token = START;
+            m_internal->_parse_index = 0;
+            break;
+        } else if (*read == ',') {
+            m_internal->_attribute_sequence = attribute_sequence_reset;
+            m_internal->attribute_name_hash = HASH_START_VALUE;
+            (*readinc)++;
+            break;
+        } else {
+            (*readinc)++;
         }
     }
     return 0;
@@ -340,20 +401,31 @@ void m3u8_setopt_allow_custom_tags(M3U8* m3u8, bool allowed) {
     ((M3U8_internal *)m3u8)->allow_custom_tags = allowed;
 }
 
+void m3u8_setopt_strict_attribute_lists(M3U8* m3u8, bool strict) {
+    ((M3U8_internal *)m3u8)->strict_attribute_lists = strict;
+}
+
 M3U8 *create_m3u8() {
-    return malloc(sizeof(M3U8_internal));
+    debug_print("[m3u8] Created M3U8 instance.%i\n", 0);
+    return calloc(1, sizeof(M3U8_internal));
 }
 
 playlist *create_playlist(M3U8 *m3u8) {
-    playlist *pl = (playlist*) malloc(sizeof(playlist));
+    playlist *pl = (playlist*) calloc(1, sizeof(playlist));
+    pl->type = UNKNOWN;
+
     ((M3U8_internal *)m3u8)->_parse_token = START;
-    ((M3U8_internal *)m3u8)->_parse_index = 0;
+    //((M3U8_internal *)m3u8)->_parse_index = 0;
+    ((M3U8_internal *)m3u8)->tag_hash = HASH_START_VALUE;
+    ((M3U8_internal *)m3u8)->attribute_name_hash = HASH_START_VALUE;
+    ((M3U8_internal *)m3u8)->attribute_enum_hash = HASH_START_VALUE;
+    debug_print("[m3u8] Created playlist instance.%i\n", 0);
     return pl;
 }
 
 media_segment *create_latest_media_segment(M3U8_internal *m_internal, playlist *playlist) {
     if(m_internal->_latest_content_token == NULL) {
-        m_internal->_latest_content_token = malloc(sizeof(media_segment));
+        m_internal->_latest_content_token = calloc(1, sizeof(media_segment));
         // TODO: Make this more efficient
         media_segment *prev = playlist->first_media_segment;
         if (prev == NULL) {
@@ -373,7 +445,9 @@ media_segment *create_latest_media_segment(M3U8_internal *m_internal, playlist *
 
 variant_playlist *create_latest_variant_playlist(M3U8_internal *m_internal, playlist *playlist) {
     if(m_internal->_latest_content_token == NULL) {
-        m_internal->_latest_content_token = malloc(sizeof(variant_playlist));
+        m_internal->_latest_content_token = calloc(1, sizeof(variant_playlist));
+        ((variant_playlist *)m_internal->_latest_content_token)->max_bandwidth = 0;
+        ((variant_playlist *)m_internal->_latest_content_token)->average_bandwidth = 0;
         // TODO: Make this more efficient
         variant_playlist *prev = playlist->first_variant_playlist;
         if (prev == NULL) {
@@ -392,7 +466,7 @@ variant_playlist *create_latest_variant_playlist(M3U8_internal *m_internal, play
 
 int verify_playlist_type(playlist *playlist, enum playlist_type type, int i) {
     if(playlist->type == UNKNOWN) {
-        debug_print("[m3u8] Setting playlist type to %i.\n", type);
+        debug_print("[m3u8] Setting playlist type. Offset: %i\n", i);
         playlist->type = type;
     } else if (playlist->type != type) {
         if(type == MEDIA_PLAYLIST){
@@ -420,18 +494,21 @@ void parse_playlist_chunk(M3U8 *m3u8, playlist *playlist, const char *buffer, in
                 // Ignore newlines, this line is empty
                 case '\n':
                 case '\t':
-                    continue;
+                    debug_print("[m3u8] Skipping, newline. Offset: %i\n", i);
+                    break;
                 // Line is a tag
                 case '#':
+                    debug_print("[m3u8] Reading as a tag. Offset: %i\n", i);
                     m_internal->_parse_token = TAG;
                     if(m_internal->allow_custom_tags) {
                         m_internal->_parse_buffer = malloc(M3U8_TAG_MAX_SIZE);
                     }
                     m_internal->tag_hash = HASH_START_VALUE;
                     m_internal->_parse_index = 0;
-                    continue;
+                    break;
                 // Line is a URI
                 default:
+                    debug_print("[m3u8] Reading as a URI. Offset: %i\n", i);
                     m_internal->_parse_token = URI;
                     // The latest parsed token *should* be a URI object with an empty buffer as URI, created by EXT-X-STREAM-INF or EXTINF
                     // If not, the m3u8 is invalid or custom.
@@ -441,12 +518,17 @@ void parse_playlist_chunk(M3U8 *m3u8, playlist *playlist, const char *buffer, in
                         return;
                     }
 
-                    if(playlist->type == MASTER_PLAYLIST) {
-                        variant_playlist *variant = ((variant_playlist *)m_internal->_latest_content_token);
-                        m_internal->_parse_buffer = variant->uri;
+                    if(playlist->type == MASTER_PLAYLIST && m_internal->_latest_content_token != NULL) {
+                        m_internal->_parse_buffer = malloc(M3U8_URI_MAX_SIZE);
+                        ((variant_playlist *)m_internal->_latest_content_token)->uri = m_internal->_parse_buffer;
+                        debug_print("[m3u8] Parsing URI as a variant_playlist. Offset: %i\n", i);
+                    } else if (playlist->type == MEDIA_PLAYLIST && m_internal->_latest_content_token != NULL) {
+                        m_internal->_parse_buffer = malloc(M3U8_URI_MAX_SIZE);
+                        ((media_segment *)m_internal->_latest_content_token)->uri = m_internal->_parse_buffer;
+                        debug_print("[m3u8] Parsing URI as a media_segment. Offset: %i\n", i);
                     } else {
-                        media_segment *segment = ((media_segment *)m_internal->_latest_content_token);
-                        m_internal->_parse_buffer = segment->uri;
+                        fprintf(stderr, "[m3u8] Invalid file format: Parsed URI before EXTINF or EXT-X-STREAM-INF tag. Offset: %i\n", i);
+                        return;
                     }
                     m_internal->_parse_buffer[0] = c;
                     m_internal->_parse_index = 1;
@@ -480,7 +562,9 @@ void parse_playlist_chunk(M3U8 *m3u8, playlist *playlist, const char *buffer, in
             } else {
                 while(i < size) {
                     c = buffer[i];
+                    //debug_print("[m3u8] Parsing character %c as a tag.\n", c);
                     if(c == '\n' || c == '\r') {
+                        debug_print("[m3u8] Tag is over. Offset: %i\n", i);
                         // Tag is over. Assign it to its location
                         if(m_internal->_parse_index > 3) {
                             enum playlist_type tag_type = get_m3u8_tag_type(m_internal->tag_hash);
@@ -519,11 +603,11 @@ void parse_playlist_chunk(M3U8 *m3u8, playlist *playlist, const char *buffer, in
                                     // Tag is a custom tag with no parameters
                                     break;
                             }
-                            m_internal->_parse_token = START;
-                            i++;
-                            m_internal->_parse_index = 0;
-                            break;
                         } // Otherwise a very short comment, ignore
+                        m_internal->_parse_token = START;
+                        m_internal->_parse_index = 0;
+                        debug_print("[m3u8] Finished tag parsing and assignment. Offset: %i\n", i);
+                        break;
                     } else if (c == ':') {
 
                         enum playlist_type tag_type = get_m3u8_tag_type(m_internal->tag_hash);
@@ -536,6 +620,7 @@ void parse_playlist_chunk(M3U8 *m3u8, playlist *playlist, const char *buffer, in
                         }
 
                         if(m3u8_is_tag_custom(m_internal->tag_hash)) {
+                            debug_print2("[m3u8] Skipping tag h:%lu. Offset: %i\n", m_internal->tag_hash, i);
                             m_internal->_parse_token = TAG_SKIPPING;
                             // TODO: Finish Custom Tags implementation
                         } else {
@@ -558,17 +643,18 @@ void parse_playlist_chunk(M3U8 *m3u8, playlist *playlist, const char *buffer, in
                 }
             }
         } else if (m_internal->_parse_token == TAG_SKIPPING) {
+            debug_print("[m3u8] Parsing at TAG_SKIPPING parse token. Offset: %i\n", i);
             while (i < size) {
                 c = buffer[i];
                 if(c == '\n' || c == '\r') {
                     m_internal->_parse_token = START;
                     m_internal->_parse_index = 0;
-                    i++;
                     break;
                 }
                 i++;
             }
         } else if (m_internal->_parse_token == ATTRIBUTE) {
+            debug_print("[m3u8] Parsing at ATTRIBUTE parse token. Offset: %i\n", i);
             switch (m_internal->tag_hash) {
                 // Media Segment Tags
                 case EXTINF:
@@ -652,7 +738,7 @@ void parse_playlist_chunk(M3U8 *m3u8, playlist *playlist, const char *buffer, in
                     while (i < size) {
                         if (m_internal->_attribute_sequence == 0) {
                             // Parse up the attribute name
-                            if(parse_attribute_name(m_internal, &c, &i, buffer, size, 1) != -1) {
+                            if(parse_attribute_name(m_internal, &c, &i, buffer, size, 1) != 0) {
                                 return;
                             }
                         }
@@ -660,39 +746,16 @@ void parse_playlist_chunk(M3U8 *m3u8, playlist *playlist, const char *buffer, in
                             // Parse the attribute value
                             switch (m_internal->attribute_name_hash) {
                                 case KEY_ATTRIBUTE_METHOD:
-                                    while (i < size) {
-                                        c = buffer[i];
-                                        if (c == '\n' || c == '\t' || c == ',') {
-                                            switch (m_internal->attribute_enum_hash) {
-                                                case KEY_ATTRIBUTE_METHOD_NONE:
+                                    PARSE_ENUM_START
+                                                    KEY_ATTRIBUTE_METHOD_NONE:
                                                     key_segment->key_method = KEY_METHOD_NONE;
-                                                    break;
-                                                case KEY_ATTRIBUTE_METHOD_AES_128:
+                                                    PARSE_ENUM_BREAK
+                                                    KEY_ATTRIBUTE_METHOD_AES_128:
                                                     key_segment->key_method = KEY_METHOD_AES128;
-                                                    break;
-                                                case KEY_ATTRIBUTE_METHOD_SAMPLE_AES:
+                                                    PARSE_ENUM_BREAK
+                                                    KEY_ATTRIBUTE_METHOD_SAMPLE_AES:
                                                     key_segment->key_method = KEY_METHOD_SAMPLEAES;
-                                                    break;
-                                                default:
-                                                    fprintf(stderr, "[m3u8] Invalid file format: Unexpected 'METHOD' enum value. Offset: %i\n", i);
-                                                    return;
-                                            }
-
-                                            if (c == ',') {
-                                                m_internal->_attribute_sequence = 0;
-                                                m_internal->attribute_name_hash = HASH_START_VALUE;
-                                                break;
-                                            } else {
-                                                m_internal->_parse_token = START;
-                                                i++;
-                                                m_internal->_parse_index = 0;
-                                                break;
-                                            }
-                                        } else {
-                                            hash_char(m_internal->attribute_enum_hash, c);
-                                            i++;
-                                        }
-                                    }
+                                    PARSE_ENUM_FINISH(0)
                                     break;
                                 case KEY_ATTRIBUTE_URI:
                                     if(parse_quoted_string(m_internal, &c, &i, buffer, size, &key_segment->key_uri, 0) != 0) {
@@ -715,8 +778,14 @@ void parse_playlist_chunk(M3U8 *m3u8, playlist *playlist, const char *buffer, in
                                     }
                                     break;
                                 default:
-                                    fprintf(stderr, "[m3u8] Invalid file format: Unknown EXT-X-KEY attribute. Offset: %i\n", i);
-                                    return;
+                                    if(m_internal->strict_attribute_lists) {
+                                        fprintf(stderr,
+                                                "[m3u8] Invalid file format: Unknown EXT-X-KEY attribute. Offset: %i\n",
+                                                i);
+                                        return;
+                                    } else {
+                                        skip_attribute(m_internal, &c, &i, buffer, size, 0);
+                                    }
                             }
                         }
                     }
@@ -729,7 +798,7 @@ void parse_playlist_chunk(M3U8 *m3u8, playlist *playlist, const char *buffer, in
                     media_init_section *init_section = m_internal->latest_media_init_section;
                     while (i < size) {
                         if (m_internal->_attribute_sequence == 1) {
-                            if(parse_attribute_name(m_internal, &c, &i, buffer, size, 2) != -1) {
+                            if(parse_attribute_name(m_internal, &c, &i, buffer, size, 2) != 0) {
                                 return;
                             }
                         }
@@ -763,8 +832,14 @@ void parse_playlist_chunk(M3U8 *m3u8, playlist *playlist, const char *buffer, in
                                     }
                                     break;
                                 default:
-                                    fprintf(stderr, "[m3u8] Invalid file format: Unknown EXT-X-MAP attribute. Offset: %i\n", i);
-                                    return;
+                                    if(m_internal->strict_attribute_lists) {
+                                        fprintf(stderr,
+                                                "[m3u8] Invalid file format: Unknown EXT-X-MAP attribute. Offset: %i\n",
+                                                i);
+                                        return;
+                                    } else {
+                                        skip_attribute(m_internal, &c, &i, buffer, size, 0);
+                                    }
                             }
                         }
                         if (m_internal->_attribute_sequence == 3) {
@@ -886,6 +961,7 @@ void parse_playlist_chunk(M3U8 *m3u8, playlist *playlist, const char *buffer, in
                     }
                 // Master Playlist Tags
                 case EXT_X_MEDIA:
+                    debug_print("[m3u8] Parsing EXT-X-MEDIA tag attributes. Offset: %i\n", i);
                     verify_playlist_type(playlist, MASTER_PLAYLIST, i);
                     variant_rendition *media_variant_rendition;
                     if(m_internal->_attribute_sequence == 0) {
@@ -899,53 +975,33 @@ void parse_playlist_chunk(M3U8 *m3u8, playlist *playlist, const char *buffer, in
                             media_variant_rendition = media_variant_rendition->next_variant_rendition;
                         }
                     }
-                    while (i < size) {
+                    while (i < size && m_internal->_parse_token == ATTRIBUTE) {
                         if (m_internal->_attribute_sequence == 1) {
+                            debug_print("[m3u8] Parsing EXT-X-MEDIA tag attribute name. Offset: %i\n", i);
                             // Parse up the attribute name
-                            if (parse_attribute_name(m_internal, &c, &i, buffer, size, 2) != -1) {
+                            if (parse_attribute_name(m_internal, &c, &i, buffer, size, 2) != 0) {
                                 return;
                             }
+                            //debug_print("[m3u8] Finished parsing EXT-X-MEDIA tag attribute name. Offset: %i\n", i);
                         }
                         if (m_internal->_attribute_sequence == 2) {
+                            debug_print("[m3u8] Parsing EXT-X-MEDIA tag attribute value. Offset: %i\n", i);
                             // Parse the attribute value
                             switch (m_internal->attribute_name_hash) {
                                 case MEDIA_ATTRIBUTE_TYPE:
-                                    while (i < size) {
-                                        c = buffer[i];
-                                        if (c == '\n' || c == '\t' || c == ',') {
-                                            switch (m_internal->attribute_enum_hash) {
-                                                case MEDIA_ATTRIBUTE_TYPE_AUDIO:
+                                    PARSE_ENUM_START
+                                                    MEDIA_ATTRIBUTE_TYPE_AUDIO:
                                                     media_variant_rendition->type = AUDIO;
-                                                    break;
-                                                case MEDIA_ATTRIBUTE_TYPE_VIDEO:
+                                                    PARSE_ENUM_BREAK
+                                                    MEDIA_ATTRIBUTE_TYPE_VIDEO:
                                                     media_variant_rendition->type = VIDEO;
-                                                    break;
-                                                case MEDIA_ATTRIBUTE_TYPE_SUBTITLES:
+                                                    PARSE_ENUM_BREAK
+                                                    MEDIA_ATTRIBUTE_TYPE_SUBTITLES:
                                                     media_variant_rendition->type = SUBTITLES;
-                                                    break;
-                                                case MEDIA_ATTRIBUTE_TYPE_CLOSED_CAPTIONS:
+                                                    PARSE_ENUM_BREAK
+                                                    MEDIA_ATTRIBUTE_TYPE_CLOSED_CAPTIONS:
                                                     media_variant_rendition->type = CLOSED_CAPTIONS;
-                                                    break;
-                                                default:
-                                                    fprintf(stderr, "[m3u8] Invalid file format: Unexpected 'TYPE' enum value. Offset: %i\n", i);
-                                                    return;
-                                            }
-
-                                            if (c == ',') {
-                                                m_internal->_attribute_sequence = 1;
-                                                m_internal->attribute_name_hash = HASH_START_VALUE;
-                                                break;
-                                            } else {
-                                                m_internal->_parse_token = START;
-                                                i++;
-                                                m_internal->_parse_index = 0;
-                                                break;
-                                            }
-                                        } else {
-                                            hash_char(m_internal->attribute_enum_hash, c);
-                                            i++;
-                                        }
-                                    }
+                                    PARSE_ENUM_FINISH(1)
                                     break;
                                 case MEDIA_ATTRIBUTE_URI:
                                     if(parse_quoted_string(m_internal, &c, &i, buffer, size, &media_variant_rendition->uri, 1) != 0) {
@@ -973,100 +1029,31 @@ void parse_playlist_chunk(M3U8 *m3u8, playlist *playlist, const char *buffer, in
                                     }
                                     break;
                                 case MEDIA_ATTRIBUTE_DEFAULT:
-                                    while (i < size) {
-                                        c = buffer[i];
-                                        if (c == '\n' || c == '\t' || c == ',') {
-                                            switch (m_internal->attribute_enum_hash) {
-                                                case MEDIA_ATTRIBUTE_YES:
+                                    PARSE_ENUM_START
+                                                    MEDIA_ATTRIBUTE_YES:
                                                     media_variant_rendition->is_default = true;
-                                                    break;
-                                                case MEDIA_ATTRIBUTE_NO:
+                                                    PARSE_ENUM_BREAK
+                                                    MEDIA_ATTRIBUTE_NO:
                                                     media_variant_rendition->is_default = false;
-                                                    break;
-                                                default:
-                                                    fprintf(stderr, "[m3u8] Invalid file format: Unexpected 'DEFAULT' enum value. Offset: %i\n", i);
-                                                    return;
-                                            }
-
-                                            if (c == ',') {
-                                                m_internal->_attribute_sequence = 1;
-                                                m_internal->attribute_name_hash = HASH_START_VALUE;
-                                                break;
-                                            } else {
-                                                m_internal->_parse_token = START;
-                                                i++;
-                                                m_internal->_parse_index = 0;
-                                                break;
-                                            }
-                                        } else {
-                                            hash_char(m_internal->attribute_enum_hash, c);
-                                            i++;
-                                        }
-                                    }
+                                    PARSE_ENUM_FINISH(1)
                                     break;
                                 case MEDIA_ATTRIBUTE_AUTOSELECT:
-                                    while (i < size) {
-                                        c = buffer[i];
-                                        if (c == '\n' || c == '\t' || c == ',') {
-                                            switch (m_internal->attribute_enum_hash) {
-                                                case MEDIA_ATTRIBUTE_YES:
+                                    PARSE_ENUM_START
+                                                    MEDIA_ATTRIBUTE_YES:
                                                     media_variant_rendition->is_autoselect = true;
-                                                    break;
-                                                case MEDIA_ATTRIBUTE_NO:
+                                                    PARSE_ENUM_BREAK
+                                                    MEDIA_ATTRIBUTE_NO:
                                                     media_variant_rendition->is_autoselect = false;
-                                                    break;
-                                                default:
-                                                    fprintf(stderr, "[m3u8] Invalid file format: Unexpected 'AUTOSELECT' enum value. Offset: %i\n", i);
-                                                    return;
-                                            }
-
-                                            if (c == ',') {
-                                                m_internal->_attribute_sequence = 1;
-                                                m_internal->attribute_name_hash = HASH_START_VALUE;
-                                                break;
-                                            } else {
-                                                m_internal->_parse_token = START;
-                                                i++;
-                                                m_internal->_parse_index = 0;
-                                                break;
-                                            }
-                                        } else {
-                                            hash_char(m_internal->attribute_enum_hash, c);
-                                            i++;
-                                        }
-                                    }
+                                    PARSE_ENUM_FINISH(1)
                                     break;
                                 case MEDIA_ATTRIBUTE_FORCED:
-                                    while (i < size) {
-                                        c = buffer[i];
-                                        if (c == '\n' || c == '\t' || c == ',') {
-                                            switch (m_internal->attribute_enum_hash) {
-                                                case MEDIA_ATTRIBUTE_YES:
+                                    PARSE_ENUM_START
+                                                    MEDIA_ATTRIBUTE_YES:
                                                     media_variant_rendition->is_forced = true;
-                                                    break;
-                                                case MEDIA_ATTRIBUTE_NO:
+                                                    PARSE_ENUM_BREAK
+                                                    MEDIA_ATTRIBUTE_NO:
                                                     media_variant_rendition->is_forced = false;
-                                                    break;
-                                                default:
-                                                    fprintf(stderr, "[m3u8] Invalid file format: Unexpected 'FORCED' enum value. Offset: %i\n", i);
-                                                    return;
-                                            }
-
-                                            if (c == ',') {
-                                                m_internal->_attribute_sequence = 1;
-                                                m_internal->attribute_name_hash = HASH_START_VALUE;
-                                                break;
-                                            } else {
-                                                m_internal->_parse_token = START;
-                                                i++;
-                                                m_internal->_parse_index = 0;
-                                                break;
-                                            }
-                                        } else {
-                                            hash_char(m_internal->attribute_enum_hash, c);
-                                            i++;
-                                        }
-                                    }
+                                    PARSE_ENUM_FINISH(1)
                                     break;
                                 case MEDIA_ATTRIBUTE_INSTREAM_ID:
                                     if(parse_quoted_string(m_internal, &c, &i, buffer, size, &media_variant_rendition->instream_id, 1) != 0) {
@@ -1085,24 +1072,36 @@ void parse_playlist_chunk(M3U8 *m3u8, playlist *playlist, const char *buffer, in
                                     }
                                     break;
                                 default:
-                                    fprintf(stderr, "[m3u8] Invalid file format: Unknown EXT-X-MEDIA attribute. Offset: %i\n", i);
-                                    return;
+                                    if(m_internal->strict_attribute_lists) {
+                                        fprintf(stderr,
+                                                "[m3u8] Invalid file format: Unknown EXT-X-MEDIA attribute. Offset: %i\n",
+                                                i);
+                                        return;
+                                    } else {
+                                        skip_attribute(m_internal, &c, &i, buffer, size, 1);
+                                    }
                             }
+                        }
+                        if(m_internal->_parse_token != ATTRIBUTE) {
+                            break;
                         }
                     }
                     break;
                 case EXT_X_STREAM_INF:
+                    debug_print("[m3u8] Parsing EXT-X-STREAM-INF tag attributes. Offset: %i\n", i);
                     verify_playlist_type(playlist, MASTER_PLAYLIST, i);
                     variant_playlist *streaminf_variant_playlist = create_latest_variant_playlist(m_internal, playlist);
                     while (i < size) {
                         c = buffer[i];
                         if (m_internal->_attribute_sequence == 0) {
+                            debug_print("[m3u8] Parsing EXT-X-STREAM-INF tag attribute name. Offset: %i\n", i);
                             // Parse up the attribute name
-                            if (parse_attribute_name(m_internal, &c, &i, buffer, size, 1) != -1) {
+                            if (parse_attribute_name(m_internal, &c, &i, buffer, size, 1) != 0) {
                                 return;
                             }
                         }
                         if (m_internal->_attribute_sequence == 1) {
+                            debug_print("[m3u8] Parsing EXT-X-STREAM-INF tag attribute value. Offset: %i\n", i);
                             // Parse the attribute value
                             switch (m_internal->attribute_name_hash) {
                                 case STREAMINF_ATTRIBUTE_BANDWIDTH:
@@ -1133,36 +1132,13 @@ void parse_playlist_chunk(M3U8 *m3u8, playlist *playlist, const char *buffer, in
                                     }
                                     break;
                                 case STREAMINF_ATTRIBUTE_HDCP_LEVEL:
-                                    while (i < size) {
-                                        c = buffer[i];
-                                        if (c == '\n' || c == '\t' || c == ',') {
-                                            switch (m_internal->attribute_enum_hash) {
-                                                case STREAMINF_ATTRIBUTE_HDCP_LEVEL_NONE:
+                                    PARSE_ENUM_START
+                                                    STREAMINF_ATTRIBUTE_HDCP_LEVEL_NONE:
                                                     streaminf_variant_playlist->hdcp_level = HDCP_LEVEL_NONE;
-                                                    break;
-                                                case STREAMINF_ATTRIBUTE_HDCP_LEVEL_TYPE_0:
+                                                    PARSE_ENUM_BREAK
+                                                    STREAMINF_ATTRIBUTE_HDCP_LEVEL_TYPE_0:
                                                     streaminf_variant_playlist->hdcp_level = HDCP_LEVEL_TYPE_0;
-                                                    break;
-                                                default:
-                                                    fprintf(stderr, "[m3u8] Invalid file format: Unexpected 'HDCP-LEVEL' enum value. Offset: %i\n", i);
-                                                    return;
-                                            }
-
-                                            if (c == ',') {
-                                                m_internal->_attribute_sequence = 0;
-                                                m_internal->attribute_name_hash = HASH_START_VALUE;
-                                                break;
-                                            } else {
-                                                m_internal->_parse_token = START;
-                                                i++;
-                                                m_internal->_parse_index = 0;
-                                                break;
-                                            }
-                                        } else {
-                                            hash_char(m_internal->attribute_enum_hash, c);
-                                            i++;
-                                        }
-                                    }
+                                    PARSE_ENUM_FINISH(0)
                                     break;
                                 case STREAMINF_ATTRIBUTE_AUDIO:
                                 case STREAMINF_ATTRIBUTE_VIDEO:
@@ -1173,13 +1149,20 @@ void parse_playlist_chunk(M3U8 *m3u8, playlist *playlist, const char *buffer, in
                                     }
                                     break;
                                 default:
-                                    fprintf(stderr, "[m3u8] Invalid file format: Unknown EXT-X-STREAM_INF attribute. Offset: %i\n", i);
-                                    return;
+                                    if(m_internal->strict_attribute_lists) {
+                                        fprintf(stderr,
+                                                "[m3u8] Invalid file format: Unknown EXT-X-STREAM-INF attribute. Offset: %i\n",
+                                                i);
+                                        return;
+                                    } else {
+                                        skip_attribute(m_internal, &c, &i, buffer, size, 0);
+                                    }
 
                             }
                         }
-
-                        i++;
+                        if(m_internal->_parse_token != ATTRIBUTE) {
+                            break;
+                        }
                     }
                     break;
                 case EXT_X_I_FRAME_STREAM_INF:
@@ -1189,7 +1172,7 @@ void parse_playlist_chunk(M3U8 *m3u8, playlist *playlist, const char *buffer, in
                         c = buffer[i];
                         if (m_internal->_attribute_sequence == 0) {
                             // Parse up the attribute name
-                            if (parse_attribute_name(m_internal, &c, &i, buffer, size, 1) != -1) {
+                            if (parse_attribute_name(m_internal, &c, &i, buffer, size, 1) != 0) {
                                 return;
                             }
                         }
@@ -1218,36 +1201,13 @@ void parse_playlist_chunk(M3U8 *m3u8, playlist *playlist, const char *buffer, in
                                     }
                                     break;
                                 case STREAMINF_ATTRIBUTE_HDCP_LEVEL:
-                                    while (i < size) {
-                                        c = buffer[i];
-                                        if (c == '\n' || c == '\t' || c == ',') {
-                                            switch (m_internal->attribute_enum_hash) {
-                                                case STREAMINF_ATTRIBUTE_HDCP_LEVEL_NONE:
-                                                    istreaminf_variant_playlist->hdcp_level = HDCP_LEVEL_NONE;
-                                                    break;
-                                                case STREAMINF_ATTRIBUTE_HDCP_LEVEL_TYPE_0:
-                                                    istreaminf_variant_playlist->hdcp_level = HDCP_LEVEL_TYPE_0;
-                                                    break;
-                                                default:
-                                                    fprintf(stderr, "[m3u8] Invalid file format: Unexpected 'HDCP-LEVEL' enum value. Offset: %i\n", i);
-                                                    return;
-                                            }
-
-                                            if (c == ',') {
-                                                m_internal->_attribute_sequence = 0;
-                                                m_internal->attribute_name_hash = HASH_START_VALUE;
-                                                break;
-                                            } else {
-                                                m_internal->_parse_token = START;
-                                                i++;
-                                                m_internal->_parse_index = 0;
-                                                break;
-                                            }
-                                        } else {
-                                            hash_char(m_internal->attribute_enum_hash, c);
-                                            i++;
-                                        }
-                                    }
+                                    PARSE_ENUM_START
+                                                    STREAMINF_ATTRIBUTE_HDCP_LEVEL_NONE:
+                                                    streaminf_variant_playlist->hdcp_level = HDCP_LEVEL_NONE;
+                                                    PARSE_ENUM_BREAK
+                                                    STREAMINF_ATTRIBUTE_HDCP_LEVEL_TYPE_0:
+                                                    streaminf_variant_playlist->hdcp_level = HDCP_LEVEL_TYPE_0;
+                                    PARSE_ENUM_FINISH(0)
                                     break;
                                 case ISTREAMINF_ATTRIBUTE_URI:
                                     if(parse_quoted_string(m_internal, &c, &i, buffer, size, &istreaminf_variant_playlist->uri, 0) != 0) {
@@ -1260,13 +1220,17 @@ void parse_playlist_chunk(M3U8 *m3u8, playlist *playlist, const char *buffer, in
                                     }
                                     break;
                                 default:
-                                    fprintf(stderr, "[m3u8] Invalid file format: Unknown EXT-X-I-FRAME-STREAM-INF attribute. Offset: %i\n", i);
-                                    return;
-
+                                    if(m_internal->strict_attribute_lists) {
+                                        fprintf(stderr, "[m3u8] Invalid file format: Unknown EXT-X-I-FRAME-STREAM-INF attribute. Offset: %i\n", i);
+                                        return;
+                                    } else {
+                                        skip_attribute(m_internal, &c, &i, buffer, size, 0);
+                                    }
                             }
                         }
-
-                        i++;
+                        if(m_internal->_parse_token != ATTRIBUTE) {
+                            break;
+                        }
                     }
                     if(m_internal->_parse_token == START) {
                         m_internal->_latest_content_token = NULL;
@@ -1300,7 +1264,7 @@ void parse_playlist_chunk(M3U8 *m3u8, playlist *playlist, const char *buffer, in
                         c = buffer[i];
                         if (m_internal->_attribute_sequence == 1) {
                             // Parse up the attribute name
-                            if (parse_attribute_name(m_internal, &c, &i, buffer, size, 2) != -1) {
+                            if (parse_attribute_name(m_internal, &c, &i, buffer, size, 2) != 0) {
                                 return;
                             }
                         }
@@ -1328,12 +1292,17 @@ void parse_playlist_chunk(M3U8 *m3u8, playlist *playlist, const char *buffer, in
                                     }
                                     break;
                                 default:
-                                    fprintf(stderr, "[m3u8] Invalid file format: Unknown EXT-X-SESSION-DATA attribute. Offset: %i\n", i);
-                                    return;
+                                    if(m_internal->strict_attribute_lists) {
+                                        fprintf(stderr, "[m3u8] Invalid file format: Unknown EXT-X-SESSION-DATA attribute. Offset: %i\n", i);
+                                        return;
+                                    } else {
+                                        skip_attribute(m_internal, &c, &i, buffer, size, 1);
+                                    }
                             }
                         }
-
-                        i++;
+                        if(m_internal->_parse_token != ATTRIBUTE) {
+                            break;
+                        }
                     }
                     break;
                 case EXT_X_SESSION_KEY:
@@ -1347,7 +1316,7 @@ void parse_playlist_chunk(M3U8 *m3u8, playlist *playlist, const char *buffer, in
                         c = buffer[i];
                         if (m_internal->_attribute_sequence == 0) {
                             // Parse up the attribute name
-                            if (parse_attribute_name(m_internal, &c, &i, buffer, size, 1) != -1) {
+                            if (parse_attribute_name(m_internal, &c, &i, buffer, size, 1) != 0) {
                                 return;
                             }
                         }
@@ -1360,44 +1329,26 @@ void parse_playlist_chunk(M3U8 *m3u8, playlist *playlist, const char *buffer, in
                                     }
                                     break;
                                 case START_ATTRIBUTE_PRECISE:
-                                    while (i < size) {
-                                        c = buffer[i];
-                                        if (c == '\n' || c == '\t' || c == ',') {
-                                            switch (m_internal->attribute_enum_hash) {
-                                                case START_ATTRIBUTE_PRECISE_YES:
+                                    PARSE_ENUM_START
+                                                    START_ATTRIBUTE_PRECISE_YES:
                                                     playlist->start_precise = true;
-                                                    break;
-                                                case START_ATTRIBUTE_PRECISE_NO:
+                                                    PARSE_ENUM_BREAK
+                                                    START_ATTRIBUTE_PRECISE_NO:
                                                     playlist->start_precise = false;
-                                                    break;
-                                                default:
-                                                    fprintf(stderr, "[m3u8] Invalid file format: Unexpected 'PRECISE' enum value. Offset: %i\n", i);
-                                                    return;
-                                            }
-
-                                            if (c == ',') {
-                                                m_internal->_attribute_sequence = 0;
-                                                m_internal->attribute_name_hash = HASH_START_VALUE;
-                                                break;
-                                            } else {
-                                                m_internal->_parse_token = START;
-                                                i++;
-                                                m_internal->_parse_index = 0;
-                                                break;
-                                            }
-                                        } else {
-                                            hash_char(m_internal->attribute_enum_hash, c);
-                                            i++;
-                                        }
-                                    }
+                                    PARSE_ENUM_FINISH(0)
                                     break;
                                 default:
-                                    fprintf(stderr, "[m3u8] Invalid file format: Unknown EXT-X-START attribute. Offset: %i\n", i);
-                                    return;
+                                    if(m_internal->strict_attribute_lists) {
+                                        fprintf(stderr, "[m3u8] Invalid file format: Unknown EXT-X-START attribute. Offset: %i\n", i);
+                                        return;
+                                    } else {
+                                        skip_attribute(m_internal, &c, &i, buffer, size, 0);
+                                    }
                             }
                         }
-
-                        i++;
+                        if(m_internal->_parse_token != ATTRIBUTE) {
+                            break;
+                        }
                     }
                     break;
                 default:
@@ -1409,26 +1360,7 @@ void parse_playlist_chunk(M3U8 *m3u8, playlist *playlist, const char *buffer, in
                     break;
             }
         } else if (m_internal->_parse_token == URI) {
-            // TODO: Set NULL Segment/Variant after done parsing
-            char *uri;
-            if(playlist->type == MASTER_PLAYLIST && m_internal->_latest_content_token != NULL) {
-                if(((variant_playlist *)m_internal->_latest_content_token)->uri == NULL) {
-                    uri = malloc(M3U8_URI_MAX_SIZE);
-                    ((variant_playlist *)m_internal->_latest_content_token)->uri = uri;
-                } else {
-                    uri = ((variant_playlist *)m_internal->_latest_content_token)->uri;
-                }
-            } else if (playlist->type == MEDIA_PLAYLIST && m_internal->_latest_content_token != NULL) {
-                if(((media_segment *)m_internal->_latest_content_token)->uri == NULL) {
-                    uri = malloc(M3U8_URI_MAX_SIZE);
-                    ((media_segment *)m_internal->_latest_content_token)->uri = uri;
-                } else {
-                    uri = ((media_segment *)m_internal->_latest_content_token)->uri;
-                }
-            } else {
-                fprintf(stderr, "[m3u8] Invalid file format: Parsed URI before EXTINF or EXT-X-STREAM-INF tag. Offset: %i\n", i);
-                return;
-            }
+            debug_print("[m3u8] Parsing at URI parse token. Offset: %i\n", i);
             while (i < size) {
                 c = buffer[i];
                 if(c == '\n' || c == '\r') {
@@ -1437,14 +1369,20 @@ void parse_playlist_chunk(M3U8 *m3u8, playlist *playlist, const char *buffer, in
 
                     m_internal->_parse_token = START;
                     m_internal->_parse_index = 0;
-                    i++;
                     break;
                 } else {
-                    uri[m_internal->_parse_index] = c;
+                    m_internal->_parse_buffer[m_internal->_parse_index] = c;
+                    m_internal->_parse_index++;
+                    i++;
                 }
-
-                i++;
             }
         }
     }
+}
+
+playlist *parse_playlist(M3U8 *m3u8, const char *in) {
+    playlist *pl = create_playlist(m3u8);
+    debug_print("[m3u8] Parsing single chunk...%i\n", 0);
+    parse_playlist_chunk(m3u8, pl, in, strlen(in));
+    return pl;
 }

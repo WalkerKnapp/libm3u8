@@ -38,8 +38,8 @@ typedef struct {
     char *uri;
 
     /* EXT-X-STREAM-INF */
-    int max_bandwidth;
-    int average_bandwidth;
+    long max_bandwidth;
+    long average_bandwidth;
     char *codecs;
     int width;
     int height;

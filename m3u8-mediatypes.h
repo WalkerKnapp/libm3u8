@@ -1,7 +1,6 @@
 #pragma once
 
 #include <stdbool.h>
-#include <corecrt.h>
 
 enum key_method {
     KEY_METHOD_NONE,
@@ -48,7 +47,7 @@ typedef struct {
     // TODO: Complete implementation of keys
     char *key_uri;
     // 16 8-byte integers representing the IV Vector used with AES.
-    int *key_iv;
+    unsigned int *key_iv;
     // A string specifying how the key is represented in the URI
     char *key_format;
     // A string specifying key versions a particular key_format is compatible with
@@ -59,7 +58,7 @@ typedef struct {
 
     /* #EXT-X-PROGRAM-DATE-TIME */
     // An absolute date-time associated with the first sample of the segment.
-    time_t date_time;
+    //time_t date_time;
 
     /* #EXT-X-DATERANGE */
     // TODO: Find a way of accurately representing this info
