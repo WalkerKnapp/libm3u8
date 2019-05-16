@@ -45,6 +45,7 @@ M3U8 *create_m3u8() {
 playlist *create_playlist(M3U8 *m3u8) {
     playlist *pl = (playlist*) calloc(1, sizeof(playlist));
     pl->type = UNKNOWN;
+    pl->m3u8 = m3u8;
 
     ((M3U8_internal *)m3u8)->_parse_token = START;
     //((M3U8_internal *)m3u8)->_parse_index = 0;

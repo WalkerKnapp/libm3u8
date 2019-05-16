@@ -13,7 +13,11 @@ enum playlist_type {
     MEDIA_PLAYLIST
 };
 
+typedef void M3U8;
+
 typedef struct {
+    M3U8 *m3u8;
+
     enum playlist_type type;
 
     /* EXT-X-INDEPENDENT-SEGMENTS */
@@ -48,8 +52,6 @@ typedef struct {
     /* EXT-X-I-FRAMES-ONLY */
     bool i_frames_only;
 } playlist;
-
-typedef void M3U8;
 
 void m3u8_setopt_allow_custom_tags(M3U8* m3u8, bool allowed);
 void m3u8_setopt_strict_attribute_lists(M3U8* m3u8, bool strict);

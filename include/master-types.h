@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stdint.h>
 
 enum variant_playlist_type {
     AUDIO,
@@ -19,7 +20,7 @@ typedef struct {
 
     /* EXT-X-MEDIA */
     enum variant_playlist_type type;
-    unsigned long group_id_hash;
+    uint64_t group_id_hash;
     char *language;
     char *assoc_lang;
     char *name;
@@ -45,24 +46,10 @@ typedef struct {
     int height;
     float framerate;
     variant_playlist_hdcp_level hdcp_level;
-    unsigned long rendition_group_id_hash;
+    uint64_t rendition_group_id_hash;
 
     void *next_variant_playlist;
 } variant_playlist;
-
-typedef struct {
-    // See 4.3.4.3
-    char *uri; // Required
-
-    /* EXT-X-I-FRAME-STREAM-INF */
-    int max_bandwidth;
-    int average_bandwidth;
-    char **codecs;
-    int width;
-    int height;
-    int framerate;
-    int hdcp_level;
-} i_frame_playlist;
 
 typedef struct {
     char *data_id;

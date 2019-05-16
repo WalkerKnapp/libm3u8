@@ -67,6 +67,7 @@ variant_playlist *create_latest_variant_playlist(M3U8_internal *m_internal, play
         m_internal->_latest_content_token = calloc(1, sizeof(variant_playlist));
         ((variant_playlist *)m_internal->_latest_content_token)->max_bandwidth = 0;
         ((variant_playlist *)m_internal->_latest_content_token)->average_bandwidth = 0;
+        ((variant_playlist *)m_internal->_latest_content_token)->rendition_group_id_hash = HASH_START_VALUE;
         // TODO: Make this more efficient
         variant_playlist *prev = playlist->first_variant_playlist;
         if (prev == NULL) {
@@ -197,15 +198,9 @@ int parse_quoted_string(M3U8_internal *m_internal, char *read, int *readinc, con
         *read = buffer[*readinc];
         //debug_print2("[m3u8] Reading character '%c'. Offset: %i\n", *read, *readinc);
         if(*read == '\n' || *read == '\r') {
-            if(m_internal->_parse_index != -1) {
-                fprintf(stderr, "[m3u8] Invalid file format: Unexpected newline in quoted string. Offset: %i\n",
-                        *readinc);
-                return -1;
-            }
-            (*readinc)++;
-            m_internal->_parse_token = START;
-            m_internal->_parse_index = 0;
-            return 0;
+            fprintf(stderr, "[m3u8] Invalid file format: Unexpected newline in quoted string. Offset: %i\n",
+                    *readinc);
+            return -1;
         } else if (*read == '"') {
             cap_string(m_internal->_parse_index - 1, (*dest));
             m_internal->_parse_index = -1;
@@ -216,6 +211,11 @@ int parse_quoted_string(M3U8_internal *m_internal, char *read, int *readinc, con
                 m_internal->attribute_name_hash = HASH_START_VALUE;
                 (*readinc)++;
                 break;
+            } else if (*read == '\n' || *read == '\r') {
+                (*readinc)++;
+                m_internal->_parse_token = START;
+                m_internal->_parse_index = 0;
+                return 0;
             } else {
                 fprintf(stderr, "[m3u8] Invalid file format: Expected ',' following '\"', instead got '%c' Offset: %i\n", *read, *readinc);
                 return -1;
@@ -229,7 +229,7 @@ int parse_quoted_string(M3U8_internal *m_internal, char *read, int *readinc, con
     return 0;
 }
 
-int parse_quoted_string_as_hash(M3U8_internal *m_internal, char *read, int *readinc, const char *buffer, int buffersize, unsigned long *dest, int attribute_sequence_reset) {
+int parse_quoted_string_as_hash(M3U8_internal *m_internal, char *read, int *readinc, const char *buffer, int buffersize, HASH *dest, int attribute_sequence_reset) {
     if (m_internal->_parse_index == 0) {
         *read = buffer[*readinc];
         if(*read != '"') {
@@ -243,18 +243,27 @@ int parse_quoted_string_as_hash(M3U8_internal *m_internal, char *read, int *read
     while ((*readinc) < buffersize) {
         *read = buffer[*readinc];
         if(*read == '\n' || *read == '\r') {
-            if(m_internal->_parse_index != -1) {
-                fprintf(stderr, "[m3u8] Invalid file format: Unexpected newline in quoted string. Offset: %i\n",
+            fprintf(stderr, "[m3u8] Invalid file format: Unexpected newline in quoted string. Offset: %i\n",
                         *readinc);
-                return -1;
-            }
-            (*readinc)++;
-            m_internal->_parse_token = START;
-            m_internal->_parse_index = 0;
-            break;
+            return -1;
         } else if (*read == '"') {
             m_internal->_parse_index = -1;
             (*readinc)++;
+            *read = buffer[*readinc];
+            if(*read == ',') {
+                m_internal->_attribute_sequence = attribute_sequence_reset;
+                m_internal->attribute_name_hash = HASH_START_VALUE;
+                (*readinc)++;
+                break;
+            } else if (*read == '\n' || *read == '\r') {
+                (*readinc)++;
+                m_internal->_parse_token = START;
+                m_internal->_parse_index = 0;
+                return 0;
+            } else {
+                fprintf(stderr, "[m3u8] Invalid file format: Expected ',' following '\"', instead got '%c' Offset: %i\n", *read, *readinc);
+                return -1;
+            }
         } else if (m_internal->_parse_index == -1 && *read == ',') {
             m_internal->_attribute_sequence = attribute_sequence_reset;
             m_internal->attribute_name_hash = HASH_START_VALUE;
@@ -898,9 +907,19 @@ void parse_playlist_chunk(M3U8 *m3u8, playlist *playlist, const char *buffer, in
                     verify_playlist_type(playlist, MASTER_PLAYLIST, i);
                     variant_rendition *media_variant_rendition;
                     if(m_internal->_attribute_sequence == 0) {
-                        media_variant_rendition = malloc(sizeof(media_variant_rendition));
+                        media_variant_rendition = calloc(1, sizeof(variant_rendition));
                         media_variant_rendition->group_id_hash = HASH_START_VALUE;
                         m_internal->_attribute_sequence = 1;
+
+                        variant_rendition *prev_rendition = playlist->first_variant_rendition;
+                        if(prev_rendition != NULL) {
+                            while (prev_rendition->next_variant_rendition != NULL) {
+                                prev_rendition = prev_rendition->next_variant_rendition;
+                            }
+                            prev_rendition->next_variant_rendition = media_variant_rendition;
+                        } else {
+                            playlist->first_variant_rendition = media_variant_rendition;
+                        }
                     } else {
                         // TODO: be more efficient with this
                         media_variant_rendition = playlist->first_variant_rendition;
