@@ -1,5 +1,5 @@
-#include "hash.h"
-#include "m3u8.h"
+#include "../include/hash.h"
+#include "../include/m3u8.h"
 
 const HASH hash(const char *str) {
     HASH hash = 5381;

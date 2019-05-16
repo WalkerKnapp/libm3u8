@@ -1,4 +1,4 @@
-#include "internal-types.h"
+#include "../include/internal-types.h"
 
 #include <stdlib.h>
 #include <ctype.h>
